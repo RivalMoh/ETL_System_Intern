@@ -95,11 +95,11 @@ class DataAssessor:
 
     def _update_flags(self, mask: pd.Series, reason: str):
         if not mask.any():
-            logger.info(f"No rows flagged for reason: {reason}")
+            logger.info("No rows flagged for reason: %s", reason)
             return
 
         self.df.loc[mask, "flag_reason"] = self.df.loc[mask, "flag_reason"].apply(
             lambda x: f"{x} | {reason}" if x else reason
         )
         self.df.loc[mask, "migration_status"] = self.STATUS_FLAGGED
-        logger.info(f"Flagged {int(mask.sum())} rows for reason: {reason}")
+        logger.info("Flagged %s rows for reason: %s", int(mask.sum()), reason)
