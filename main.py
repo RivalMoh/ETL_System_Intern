@@ -1,35 +1,40 @@
+import logging
 import os
 import sys
-import pandas as pd
 from datetime import datetime
-from src.extract import APIExtractor
+
+import pandas as pd
+from dotenv import load_dotenv
+
+from src.catalog_assessor import CatalogAssessor
 from src.data_assessor import DataAssessor
-from src.catalog_assesor import CatalogAssessor
-import logging
-import dotenv
+from src.extract import APIExtractor
 
-dotenv.load_dotenv()
-
-os.makedirs("logs", exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler("logs/etl-pipeline.log"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
 
+def _setup_logging() -> None:
+    os.makedirs("logs", exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler("logs/etl-pipeline.log"),
+            logging.StreamHandler(sys.stdout),
+        ],
+    )
+
+
 def run_assessment_pipeline():
     extractor = APIExtractor(
-        base_url=os.getenv("BASE_URL"), api_key=os.getenv("API_KEY"), max_pages=1
+        base_url=os.getenv("BASE_URL"), api_key=os.getenv("API_Key"), max_pages=1
     )
 
     date_str = datetime.now().strftime("%Y%m%d_%H%M")
     report_filename = f"data/reports/Audit_migrasi_{date_str}.xlsx"
+    os.makedirs("data/reports", exist_ok=True)
 
     df_catalog = extractor.get_dataset_catalog()
 
@@ -44,7 +49,9 @@ def run_assessment_pipeline():
     ).verify_with_data_sample(sample_size=5)
 
     if not df_table_duplicates.empty:
-        duplicate_ids = df_table_duplicates["id_duplikat"].to_list()
+        duplicate_ids = pd.concat(
+            [df_table_duplicates["id_duplikat_a"], df_table_duplicates["id_duplikat_b"]]
+        ).unique().tolist()
         df_valid_catalog = df_catalog[~df_catalog["id"].isin(duplicate_ids)]
     else:
         df_valid_catalog = df_catalog
@@ -52,7 +59,7 @@ def run_assessment_pipeline():
     # cek row tabel
     micro_assessment_summaries = []
 
-    for index, row in df_valid_catalog.head(5).iterrows():
+    for _, row in df_valid_catalog.head(5).iterrows():
         dataset_id = row["id"]
         dataset_title = row["judul"]
 
@@ -93,8 +100,10 @@ def run_assessment_pipeline():
 
         # sheet 3 : katalog original
         df_catalog.to_excel(writer, sheet_name="Katalog Original", index=False)
-        logger.info(f"Laporan assessment berhasil disimpan di {report_filename}")
+    logger.info("Laporan assessment berhasil disimpan di %s", report_filename)
 
 
 if __name__ == "__main__":
+    _setup_logging()
     run_assessment_pipeline()
+

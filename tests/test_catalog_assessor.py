@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from src.catalog_assesor import CatalogAssessor
+from src.catalog_assessor import CatalogAssessor
 
 
 class DummyExtractor:
