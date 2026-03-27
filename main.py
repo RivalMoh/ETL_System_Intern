@@ -95,7 +95,7 @@ def _extract_duplicate_ids(df_duplicates: pd.DataFrame) -> Set[str]:
         return set()
 
     duplicates = pd.concat(
-        [df_duplicates["id_duplikat_a"], df_duplicates["id_duplikat_b"]]
+        [df_duplicates["ID_Tabel_A"], df_duplicates["ID_Tabel_B"]]
     ).astype("string")
     return set(duplicates.dropna().tolist())
 
@@ -163,8 +163,26 @@ def run_assessment_pipeline() -> None:
         dataset_id = row["id"]
         dataset_title = row["judul"]
         is_catalog_suspect = str(dataset_id) in duplicate_ids
+        try:
+            df_detail = extractor.get_dataset_details(dataset_id)
+        except Exception as exc:
+            logger.error(f"Skipping dataset_id={dataset_id} due to fetch error: {exc}")
 
-        df_detail = extractor.get_dataset_details(dataset_id)
+            micro_assessment_summaries.append(
+                {
+                    "Dataset_Id": dataset_id,
+                    "Judul_Tabel": dataset_title,
+                    "Catalog_Suspect": is_catalog_suspect,
+                    "Total_Rows": 0,
+                    "Baris Bermasalah": 0,
+                    "Baris Siap Load": 0,
+                    "Persentase_Bersih": "0.00%",
+                    "Persentase_Siap_Load": "0.00%",
+                    "Schema_Issues": f"API Fetch Error (Skipped): {str(exc)}",  # alasan error
+                    "Load_Decision": "manager_review_fetch_error",  # Status khusus
+                }
+            )
+            continue
 
         if df_detail.empty:
             micro_assessment_summaries.append(
@@ -272,32 +290,28 @@ def run_assessment_pipeline() -> None:
         ]
     )
 
-    # export ke excel
+    # export ke excel + csv
+    ready_csv_filename = f"data/reports/Load_ready_rows_{date_str}.csv"
+    review_csv_filename = f"data/reports/Manager_review_rows_{date_str}.csv"
+
+    if not df_load_ready.empty:
+        df_load_ready.to_csv(ready_csv_filename, index=False)
+        logger.info("Baris siap load berhasil disimpan di %s", ready_csv_filename)
+
+    if not df_manager_review.empty:
+        df_manager_review.to_csv(review_csv_filename, index=False)
+        logger.info(
+            "Baris untuk review manajer berhasil disimpan di %s", review_csv_filename
+        )
+
     with pd.ExcelWriter(report_filename, engine="openpyxl") as writer:
-        # sheet 1 : ringkasan duplikasi tabel
-        df_table_duplicates.to_excel(writer, sheet_name="Tabel Duplikat", index=False)
-
-        # sheet 2 : pasangan/row yang tidak bisa diverifikasi saat cek duplikasi
+        df_table_duplicates.to_excel(writer, sheet_name="Table_Duplicates", index=False)
         df_duplicate_skipped.to_excel(
-            writer, sheet_name="Duplikat Skipped", index=False
+            writer, sheet_name="Duplicate_Skipped", index=False
         )
-
-        # sheet 3 : ringkasan kualitas data
-        df_micro_summary.to_excel(writer, sheet_name="Kualitas Data", index=False)
-
-        # sheet 4 : ringkasan load gate
-        df_load_summary.to_excel(writer, sheet_name="Load Summary", index=False)
-
-        # sheet 5 : detail baris yang siap load (hanya dataset ready_for_load)
-        df_load_ready.to_excel(writer, sheet_name="Load Ready Rows", index=False)
-
-        # sheet 6 : detail baris yang harus ditinjau manajerial
-        df_manager_review.to_excel(
-            writer, sheet_name="Manager Review Rows", index=False
-        )
-
-        # sheet 7 : katalog original
-        df_catalog.to_excel(writer, sheet_name="Katalog Original", index=False)
+        df_micro_summary.to_excel(writer, sheet_name="Kualitas_Data", index=False)
+        df_load_summary.to_excel(writer, sheet_name="Load_Summary", index=False)
+        df_catalog.to_excel(writer, sheet_name="Dataset Original", index=False)
 
     logger.info("Laporan assessment berhasil disimpan di %s", report_filename)
     logger.info(

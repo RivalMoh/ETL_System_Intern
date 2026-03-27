@@ -26,7 +26,9 @@ class CatalogAssessor:
         checked_ids = set()
 
         rows = list(self.df_catalog[["id", "judul"]].itertuples(index=False, name=None))
-        normalized_rows = [(str(row_id), self._normalize_text(title)) for row_id, title in rows]
+        normalized_rows = [
+            (str(row_id), self._normalize_text(title)) for row_id, title in rows
+        ]
 
         for i, (id_a, title_a) in enumerate(normalized_rows):
             if id_a in checked_ids:
@@ -39,7 +41,7 @@ class CatalogAssessor:
                 if id_b in checked_ids:
                     continue
 
-                sim_score = fuzz.token_set_ratio(title_a, title_b)
+                sim_score = fuzz.token_sort_ratio(title_a, title_b)
                 if sim_score >= threshold:
                     current_group.append(id_b)
                     checked_ids.add(id_b)
@@ -69,23 +71,35 @@ class CatalogAssessor:
         verified_duplicates: List[Dict[str, Any]] = []
         self.skipped_rows = []
 
+        # help map id to title
+        id_to_title = dict(
+            zip(self.df_catalog["id"].astype(str), self.df_catalog["judul"])
+        )
+
         for group in self.suspect_groups:
             ids = [str(x) for x in group.get("dataset_ids", [])]
             if len(ids) < 2:
                 continue
 
             samples: Dict[str, str] = {}
+            group_base_title = group.get("base_title", "")
 
+            # TAHAP 1: Ekstraksi Sampel per ID
             for dataset_id in ids:
+                # Ambil judul asli dari dataset ini
+                actual_title = id_to_title.get(dataset_id, "Judul Tidak Diketahui")
+
                 try:
                     df_detail = self.extractor.get_dataset_details(dataset_id)
                 except Exception as exc:
+                    # Laporan Skipped yang jauh lebih jelas
                     self.skipped_rows.append(
                         {
-                            "dataset_id": dataset_id,
-                            "base_title": group.get("base_title", ""),
-                            "reason": "fetch_error",
-                            "detail": str(exc),
+                            "Dataset_ID_Gagal": dataset_id,
+                            "Judul_Asli_Dataset": actual_title,
+                            "Kategori_Error": "Gagal Tarik API (Fetch Error)",
+                            "Pesan_Detail": str(exc),
+                            "Grup_Pencarian_Awal": group_base_title,
                         }
                     )
                     continue
@@ -93,53 +107,49 @@ class CatalogAssessor:
                 if df_detail.empty:
                     self.skipped_rows.append(
                         {
-                            "dataset_id": dataset_id,
-                            "base_title": group.get("base_title", ""),
-                            "reason": "empty_detail",
-                            "detail": "No rows returned from API",
+                            "Dataset_ID_Gagal": dataset_id,
+                            "Judul_Asli_Dataset": actual_title,
+                            "Kategori_Error": "Tabel Kosong (Empty Detail)",
+                            "Pesan_Detail": "API sukses, tetapi tidak ada baris data di dalamnya",
+                            "Grup_Pencarian_Awal": group_base_title,
                         }
                     )
                     continue
 
                 df_sample = df_detail.head(sample_size).copy()
                 fingerprint = self._build_fingerprint(df_sample)
+
                 if not fingerprint:
                     self.skipped_rows.append(
                         {
-                            "dataset_id": dataset_id,
-                            "base_title": group.get("base_title", ""),
-                            "reason": "empty_fingerprint",
-                            "detail": "Sample rows could not produce fingerprint",
+                            "Dataset_ID_Gagal": dataset_id,
+                            "Judul_Asli_Dataset": actual_title,
+                            "Kategori_Error": "Data Tidak Valid (Empty Fingerprint)",
+                            "Pesan_Detail": "Baris sampel hanya berisi nilai kosong/NaN",
+                            "Grup_Pencarian_Awal": group_base_title,
                         }
                     )
                     continue
 
                 samples[dataset_id] = fingerprint
 
-            # Pairwise comparison within group
-            for left_id, right_id in combinations(ids, 2):
-                left_fp = samples.get(left_id)
-                right_fp = samples.get(right_id)
+            # TAHAP 2: Komparasi Pasangan (HANYA untuk ID yang berhasil ditarik)
+            valid_ids = [did for did in ids if did in samples]
 
-                if not left_fp or not right_fp:
-                    self.skipped_rows.append(
-                        {
-                            "dataset_id_a": left_id,
-                            "dataset_id_b": right_id,
-                            "base_title": group.get("base_title", ""),
-                            "reason": "missing_sample",
-                            "detail": "At least one dataset has no usable sample",
-                        }
-                    )
-                    continue
+            for left_id, right_id in combinations(valid_ids, 2):
+                left_fp = samples[left_id]
+                right_fp = samples[right_id]
 
                 if left_fp == right_fp:
+                    # Laporan Duplikat yang super informatif
                     verified_duplicates.append(
                         {
-                            "id_duplikat_a": left_id,
-                            "id_duplikat_b": right_id,
-                            "alasan": "Isi data identik (sample-based)",
-                            "base_title": group.get("base_title", ""),
+                            "ID_Tabel_A": left_id,
+                            "Judul_Tabel_A": id_to_title.get(left_id, ""),
+                            "ID_Tabel_B": right_id,
+                            "Judul_Tabel_B": id_to_title.get(right_id, ""),
+                            "Alasan_Duplikat": "Isi data identik (Berdasarkan Sampel 5 Baris)",
+                            "Grup_Pencarian_Awal": group_base_title,
                         }
                     )
 
@@ -148,7 +158,7 @@ class CatalogAssessor:
             "Verifikasi selesai, ditemukan %s duplikat berdasarkan isi data.",
             len(df_duplicates),
         )
-        logger.info("Total skipped rows/pairs: %s", len(self.skipped_rows))
+        logger.info("Total tabel yang di-skip (Error): %s", len(self.skipped_rows))
         return df_duplicates
 
     def get_skipped_rows(self) -> pd.DataFrame:

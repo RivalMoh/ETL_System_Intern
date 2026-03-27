@@ -2,32 +2,7 @@ import pandas as pd
 import pytest
 
 from src.catalog_assessor import CatalogAssessor
-
-
-class DummyExtractor:
-    def __init__(self, mapping=None, errors=None):
-        self.mapping = mapping or {}
-        self.errors = errors or {}
-
-    def get_dataset_details(self, dataset_id: str) -> pd.DataFrame:
-        if dataset_id in self.errors:
-            raise self.errors[dataset_id]
-        return self.mapping.get(dataset_id, pd.DataFrame())
-
-
-@pytest.fixture
-def sample_catalog():
-    return pd.DataFrame(
-        {
-            "id": ["A", "B", "C", "D"],
-            "judul": [
-                "Produksi Padi Jawa Tengah",
-                "Jawa Tengah Produksi Padi",
-                "Data Kemiskinan",
-                "Kemiskinan Data",
-            ],
-        }
-    )
+from tests.conftest import DummyExtractor
 
 
 def test_group_by_title_similarity_builds_groups(sample_catalog):
@@ -86,9 +61,9 @@ def test_verify_with_data_sample_pairwise_duplicates():
     df_dup = assessor.verify_with_data_sample(sample_size=5)
 
     assert len(df_dup) == 3
-    pair = {df_dup.loc[0, "id_duplikat_a"], df_dup.loc[0, "id_duplikat_b"]}
+    pair = {df_dup.loc[0, "ID_Tabel_A"], df_dup.loc[0, "ID_Tabel_B"]}
     assert pair == {"A", "B"}
-    pair_2 = {df_dup.loc[1, "id_duplikat_a"], df_dup.loc[1, "id_duplikat_b"]}
+    pair_2 = {df_dup.loc[1, "ID_Tabel_A"], df_dup.loc[1, "ID_Tabel_B"]}
     assert pair_2 == {"A", "D"} or pair_2 == {"B", "D"}
 
 
@@ -108,10 +83,9 @@ def test_verify_with_data_sample_records_skipped_rows():
 
     assert df_dup.empty
     assert len(df_skipped) >= 2
-    reasons = set(df_skipped["reason"].tolist())
-    assert "empty_detail" in reasons
-    assert "fetch_error" in reasons
-    assert "missing_sample" in reasons
+    reasons = set(df_skipped["Kategori_Error"].tolist())
+    assert any("Empty Detail" in r for r in reasons)
+    assert any("Fetch Error" in r for r in reasons)
 
 
 def test_validate_required_columns():

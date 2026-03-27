@@ -3,19 +3,7 @@ import pytest
 import requests
 
 from src.extract import APIExtractor
-
-
-class FakeResponse:
-    def __init__(self, payload, status_code=200):
-        self.payload = payload
-        self.status_code = status_code
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise requests.exceptions.HTTPError(f"HTTP {self.status_code}")
-
-    def json(self):
-        return self.payload
+from tests.conftest import FakeResponse
 
 
 def test_get_dataset_catalog_with_keyword_filter():

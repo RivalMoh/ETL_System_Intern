@@ -4,18 +4,6 @@ import pytest
 from src.data_assessor import DataAssessor
 
 
-@pytest.fixture
-def messy_harvest_data():
-    return pd.DataFrame(
-        {
-            "record_id": ["A1", "A2", "A3", "A4"],
-            "province": ["Jawa Barat", "Jawa Barat", "Jawa Tengah", None],
-            "year": [2023, 2023, 2024, 2025],
-            "harvest_tonnage": [100.5, 100.5, 150.0, 200.0],
-        }
-    )
-
-
 def test_assessor_tagging_logic(messy_harvest_data):
     result_df = (
         DataAssessor(messy_harvest_data)

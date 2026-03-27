@@ -30,7 +30,15 @@ class APIExtractor:
         self.session = requests.Session()
         headers = {"Accept": "application/json"}
         if api_key:
-            headers["Authorization"] = api_key
+            clean_key = api_key.strip()
+
+            if not clean_key.lower().startswith(
+                "bearer "
+            ) and not clean_key.lower().startswith("token "):
+                headers["Authorization"] = f"Bearer {clean_key}"
+            else:
+                headers["Authorization"] = api_key
+
         self.session.headers.update(headers)
 
         retry = Retry(
