@@ -9,3 +9,4 @@ data/
 
 .vscode/
 .coverage/
+.env
