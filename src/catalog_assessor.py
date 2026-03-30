@@ -24,7 +24,7 @@ class CatalogAssessor:
 
         self.suspect_groups = []
         checked_ids = set()
-
+        # perlu checking besar kecil untuk menghindari mismatch karena perbedaan kapitalisasi atau spasi
         rows = list(self.df_catalog[["id", "judul"]].itertuples(index=False, name=None))
         normalized_rows = [
             (str(row_id), self._normalize_text(title)) for row_id, title in rows

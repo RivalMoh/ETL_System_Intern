@@ -25,6 +25,9 @@ class AppSettings:
         self.require_columns = self._read_list("REQUIRED_COLUMNS", ["tahun", "jumlah"])
         self.allowed_load_statuses = self._read_list("LOAD_ALLOWED_STATUSES", ["ready"])
 
+        self.new_base_url = os.getenv("NEW_BASE_URL").rstrip("/")
+        self.new_api_key = os.getenv("NEW_API_KEY")
+
     @staticmethod
     def _read_int(
         name: str,
