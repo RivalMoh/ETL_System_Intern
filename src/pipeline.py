@@ -72,9 +72,10 @@ class MigrationPipeline:
 
             # assessment per kolom pada tabel
             assessor = DataAssessor(df_detail)
-            df_assessed = assessor.flag_missing_values(
-                self.settings.require_columns
-            ).mark_ready()
+            df_assessed = (assessor
+                           .standardize_year_column()
+                           .flag_missing_values(self.settings.require_columns)
+                           .mark_ready())
 
             # Hitung Statisik
             total_rows = len(df_detail)
@@ -162,22 +163,23 @@ class MigrationPipeline:
                     )
                 )
         else:
-            df_flagged = df_assessed[
-                df_assessed["migration_status"] == DataAssessor.STATUS_FLAGGED
-            ]
-            if not df_flagged.empty:
-                data_cols = [c for c in df_flagged.columns if c not in audit_cols]
+            # Routing semua baris (flagged MAUPUN ready) ke review_list
+            # agar manager bisa melihat konteks lengkap dataset yang suspect/bermasalah.
+            # Baris ready dalam dataset suspect TIDAK boleh langsung diload
+            # tanpa persetujuan manager, karena validitas katalognya masih dipertanyakan.
+            if not df_assessed.empty:
+                data_cols = [c for c in df_assessed.columns if c not in audit_cols]
                 review_list.append(
                     pd.DataFrame(
                         {
                             "Dataset_Id": dataset_id,
                             "Judul_Tabel": title,
                             "Catalog_Suspect": is_suspect,
-                            "migration_status": df_flagged["migration_status"],
-                            "flag_reason": df_flagged["flag_reason"],
+                            "migration_status": df_assessed["migration_status"],
+                            "flag_reason": df_assessed["flag_reason"],
                             "Row_Data_JSON": [
                                 json.dumps(r, default=str)
-                                for r in df_flagged[data_cols].to_dict(orient="records")
+                                for r in df_assessed[data_cols].to_dict(orient="records")
                             ],
                         }
                     )

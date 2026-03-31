@@ -39,9 +39,10 @@ def test_verify_with_data_sample_pairwise_duplicates():
         }
     )
 
+    # A, B, D: isi identik (D urutan baris terbalik — harus tetap terdeteksi karena row-order independent)
     df_same_1 = pd.DataFrame({"col1": [1, 2], "col2": ["x", "y"]})
     df_same_2 = pd.DataFrame({"col1": [1, 2], "col2": ["x", "y"]})
-    df_same_3 = pd.DataFrame({"col1": ["x", 1], "col2": [2, "y"]})
+    df_same_3 = pd.DataFrame({"col1": [2, 1], "col2": ["y", "x"]})  # urutan baris terbalik
     df_diff = pd.DataFrame({"col1": [9, 10], "col2": ["m", "n"]})
 
     extractor = DummyExtractor(
@@ -60,11 +61,17 @@ def test_verify_with_data_sample_pairwise_duplicates():
 
     df_dup = assessor.verify_with_data_sample(sample_size=5)
 
+    # A, B, D semuanya identik → 3 pasang: A-B, A-D, B-D
     assert len(df_dup) == 3
-    pair = {df_dup.loc[0, "ID_Tabel_A"], df_dup.loc[0, "ID_Tabel_B"]}
-    assert pair == {"A", "B"}
-    pair_2 = {df_dup.loc[1, "ID_Tabel_A"], df_dup.loc[1, "ID_Tabel_B"]}
-    assert pair_2 == {"A", "D"} or pair_2 == {"B", "D"}
+
+    # Gunakan frozenset agar assertion tidak bergantung pada urutan baris di DataFrame
+    found_pairs = {
+        frozenset([row["ID_Tabel_A"], row["ID_Tabel_B"]])
+        for _, row in df_dup.iterrows()
+    }
+    assert frozenset(["A", "B"]) in found_pairs
+    assert frozenset(["A", "D"]) in found_pairs
+    assert frozenset(["B", "D"]) in found_pairs
 
 
 def test_verify_with_data_sample_records_skipped_rows():
@@ -101,3 +108,77 @@ def test_validate_threshold_range(sample_catalog):
 
     with pytest.raises(ValueError, match="rentang 0-100"):
         assessor.group_by_title_similarity(threshold=120)
+
+
+def test_verify_near_identical_strings_detected():
+    """
+    Dataset dengan nilai string hampir identik (typo minor) harus terdeteksi
+    saat similarity_threshold=90, tapi TIDAK terdeteksi saat threshold=100.
+    Ini membuktikan fuzzy comparison bekerja dan bukan hanya exact match.
+    """
+    catalog = pd.DataFrame({
+        "id": ["X", "Y"],
+        "judul": ["Data Kemiskinan Jateng", "Kemiskinan Data Jateng"],
+    })
+
+    # X: data asli dengan nama kabupaten benar
+    df_original = pd.DataFrame({
+        "kabupaten": ["Semarang", "Solo", "Magelang"],
+        "jumlah_miskin": ["12345", "87654", "45678"],
+    })
+    # Y: hampir identik — satu typo ("Semerang" bukan "Semarang")
+    df_typo = pd.DataFrame({
+        "kabupaten": ["Semerang", "Solo", "Magelang"],   # ← 1 karakter beda
+        "jumlah_miskin": ["12345", "87654", "45678"],
+    })
+
+    extractor = DummyExtractor(mapping={
+        "X": df_original.assign(dataset_id="X"),
+        "Y": df_typo.assign(dataset_id="Y"),
+    })
+
+    assessor = CatalogAssessor(catalog, extractor)
+    assessor.suspect_groups = [{"base_title": "data kemiskinan", "dataset_ids": ["X", "Y"]}]
+
+    # threshold 90 → harus terdeteksi meski ada 1 typo
+    df_dup_fuzzy = assessor.verify_with_data_sample(sample_size=5, similarity_threshold=90)
+    assert len(df_dup_fuzzy) == 1
+    assert "Skor_Kemiripan" in df_dup_fuzzy.columns
+    assert df_dup_fuzzy.loc[0, "Skor_Kemiripan"] < 100.0   # bukan identik persis
+    assert df_dup_fuzzy.loc[0, "Skor_Kemiripan"] >= 90.0   # tapi masih di atas threshold
+    assert "hampir identik" in df_dup_fuzzy.loc[0, "Alasan_Duplikat"]
+
+    # threshold 100 (exact only) → TIDAK terdeteksi karena ada typo
+    df_dup_strict = assessor.verify_with_data_sample(sample_size=5, similarity_threshold=100)
+    assert df_dup_strict.empty
+
+
+def test_verify_completely_different_data_not_flagged():
+    """
+    Dataset dengan isi data yang benar-benar berbeda tidak boleh di-flag
+    meski judul mirip, bahkan dengan threshold rendah (85).
+    """
+    catalog = pd.DataFrame({
+        "id": ["P", "Q"],
+        "judul": ["Data Padi Jateng", "Padi Data Jateng"],
+    })
+
+    df_a = pd.DataFrame({
+        "kabupaten": ["Semarang", "Solo"],
+        "produksi_ton": ["5000", "3000"],
+    })
+    df_b = pd.DataFrame({
+        "kabupaten": ["Banyumas", "Purworejo"],
+        "produksi_ton": ["1200", "9800"],
+    })
+
+    extractor = DummyExtractor(mapping={
+        "P": df_a.assign(dataset_id="P"),
+        "Q": df_b.assign(dataset_id="Q"),
+    })
+
+    assessor = CatalogAssessor(catalog, extractor)
+    assessor.suspect_groups = [{"base_title": "data padi", "dataset_ids": ["P", "Q"]}]
+
+    df_dup = assessor.verify_with_data_sample(sample_size=5, similarity_threshold=85)
+    assert df_dup.empty

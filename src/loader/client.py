@@ -20,7 +20,7 @@ class TargetAPIClient:
         if api_key:
             headers["Authorization"] = (
                 api_key
-                if api_key.lower().startswith("Bearer ")
+                if api_key.lower().startswith("bearer ")
                 else f"Bearer {api_key}"
             )
 
@@ -49,6 +49,7 @@ class TargetAPIClient:
     def post_data(self, target_id: int, payload: Dict[str, Any]) -> bool:
         """Mengirim data ke sistem baru berdasarkan id_target dan payload yang sudah diformat"""
         url = f"{self.base_url}/{target_id}"
+        response = None
         try:
             response = self.session.post(url, json=payload, timeout=20)
             response.raise_for_status()
@@ -61,6 +62,6 @@ class TargetAPIClient:
             logger.error(f"Gagal POST ke ID {target_id} | Error: {error_msg}")
             return False
 
-    def cloase(self):
+    def close(self):
         """Menutup sesi HTTP."""
         self.session.close()

@@ -3,6 +3,7 @@ from itertools import combinations
 from typing import Dict, List, Any
 
 import pandas as pd
+import re
 from thefuzz import fuzz
 
 from src.extract import APIExtractor
@@ -62,11 +63,19 @@ class CatalogAssessor:
         )
         return self
 
-    def verify_with_data_sample(self, sample_size: int = 5) -> pd.DataFrame:
+    def verify_with_data_sample(
+        self, sample_size: int = 5, similarity_threshold: int = 98
+    ) -> pd.DataFrame:
         """
         Membandingkan sample data untuk setiap pasangan ID dalam suspect group.
-        Hasil duplikat dikembalikan sebagai DataFrame.
-        Pasangan/ID yang tidak bisa diverifikasi disimpan di self.skipped_rows.
+
+        Menggunakan fuzzy comparison antar baris—bukan exact match—sehingga dataset
+        yang hampir identik (typo, variasi minor string) juga terdeteksi sebagai duplikat.
+
+        Args:
+            sample_size: Jumlah baris sampel yang diambil per dataset.
+            similarity_threshold: Skor minimal (0-100) untuk dianggap duplikat.
+                                  100 = identik persis, 90 = hampir identik.
         """
         verified_duplicates: List[Dict[str, Any]] = []
         self.skipped_rows = []
@@ -81,7 +90,7 @@ class CatalogAssessor:
             if len(ids) < 2:
                 continue
 
-            samples: Dict[str, str] = {}
+            samples: Dict[str, List[str]] = {}  # dataset_id → list of row strings
             group_base_title = group.get("base_title", "")
 
             # TAHAP 1: Ekstraksi Sampel per ID
@@ -133,22 +142,29 @@ class CatalogAssessor:
 
                 samples[dataset_id] = fingerprint
 
-            # TAHAP 2: Komparasi Pasangan (HANYA untuk ID yang berhasil ditarik)
+            # Komparasi Pasangan (fuzzy)
             valid_ids = [did for did in ids if did in samples]
 
             for left_id, right_id in combinations(valid_ids, 2):
-                left_fp = samples[left_id]
-                right_fp = samples[right_id]
+                left_rows = samples[left_id]
+                right_rows = samples[right_id]
 
-                if left_fp == right_fp:
-                    # Laporan Duplikat yang super informatif
+                similarity = self._compute_similarity(left_rows, right_rows)
+
+                if similarity >= similarity_threshold:
+                    label = (
+                        "Isi data identik (100%)"
+                        if similarity == 100.0
+                        else f"Isi data hampir identik ({similarity:.1f}%)"
+                    )
                     verified_duplicates.append(
                         {
                             "ID_Tabel_A": left_id,
                             "Judul_Tabel_A": id_to_title.get(left_id, ""),
                             "ID_Tabel_B": right_id,
                             "Judul_Tabel_B": id_to_title.get(right_id, ""),
-                            "Alasan_Duplikat": "Isi data identik (Berdasarkan Sampel 5 Baris)",
+                            "Skor_Kemiripan": round(similarity, 1),
+                            "Alasan_Duplikat": label,
                             "Grup_Pencarian_Awal": group_base_title,
                         }
                     )
@@ -180,16 +196,23 @@ class CatalogAssessor:
 
     @staticmethod
     def _normalize_text(value: Any) -> str:
-        return str(value).strip().lower()
+        text = str(value).strip().lower()
+        text = re.sub(r"[^\w\s]", "", text)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
 
     @staticmethod
-    def _build_fingerprint(df_sample: pd.DataFrame) -> str:
-        # dataset_id biasanya ditambahkan extractor, buang agar tidak mengganggu matching
+    def _build_fingerprint(df_sample: pd.DataFrame) -> List[str]:
+        """Kembalikan list of normalized row strings ('col=val|col=val') dari sampel.
+
+        Format ini (bukan hash) memungkinkan fuzzy comparison antar dataset.
+        Urutan kolom distabilkan dengan sorted() agar konsisten.
+        """
         if "dataset_id" in df_sample.columns:
             df_sample = df_sample.drop(columns=["dataset_id"])
 
         if df_sample.empty:
-            return ""
+            return []
 
         normalized = (
             df_sample.fillna("")
@@ -197,9 +220,40 @@ class CatalogAssessor:
             .apply(lambda col: col.str.strip().str.lower())
         )
 
-        value_list = normalized.values.flatten().tolist()
-        cleaned = [v for v in value_list if v != ""]
-        if not cleaned:
-            return ""
+        row_strings: List[str] = []
+        for _, row in normalized.iterrows():
+            row_str = "|".join(
+                f"{col}={val}"
+                for col, val in sorted(row.items())
+                if val != ""
+            )
+            if row_str:
+                row_strings.append(row_str)
 
-        return "_".join(sorted(cleaned))
+        return row_strings
+
+    @staticmethod
+    def _compute_similarity(rows_a: List[str], rows_b: List[str]) -> float:
+        """Hitung skor kemiripan (0-100) antara dua dataset berdasarkan baris-barisnya.
+
+        Menggunakan bidirectional matching:
+        - Setiap baris A dicari pasangan terbaiknya di B (one-way A→B)
+        - Setiap baris B dicari pasangan terbaiknya di A (one-way B→A)
+        - Skor final = rata-rata kedua arah
+
+        Ini memastikan bahwa skor bersifat simetris dan tidak bias terhadap
+        dataset yang lebih pendek.
+        """
+        if not rows_a or not rows_b:
+            return 0.0
+
+        def one_way(src: List[str], tgt: List[str]) -> float:
+            total = sum(
+                max(fuzz.ratio(r_src, r_tgt) for r_tgt in tgt)
+                for r_src in src
+            )
+            return total / len(src)
+
+        score_ab = one_way(rows_a, rows_b)
+        score_ba = one_way(rows_b, rows_a)
+        return (score_ab + score_ba) / 2

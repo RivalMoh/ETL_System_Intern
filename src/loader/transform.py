@@ -6,7 +6,7 @@ from typing import List, Dict, Any
 logger = logging.getLogger(__name__)
 
 
-class MigrationTranformer:
+class MigrationTransformer:
     """
     Bertanggung jawab untuk mengubah data hasil audit menjadi format payload yang siap dikirim ke API target.
     1. harus mempunya df_mapping yang berisi mapping antara old_id dan new_id
@@ -41,21 +41,30 @@ class MigrationTranformer:
             raw_rows = [json.loads(row) for row in group["Row_Data_JSON"]]
 
             # kelompokkan baris berdasarkan Tahun
-            data_by_year = {}
+            data_by_year: Dict[int, list] = {}
             for row in raw_rows:
-                # Cari key tahun (bisa "tahun" atau "tahun_data" dari sistem lama)
-                tahun = int(row.pop("tahun", row.pop("tahun_data", 0)))
+                # Ambil nilai tahun tanpa mutasi dict asli
+                tahun_raw = row.get("tahun")
 
-                if tahun == 0:
+                if tahun_raw is None:
                     logger.warning(
-                        f"Baris dengan Dataset_Id {old_id} tidak memiliki informasi tahun, melewati baris ini."
+                        f"Dataset_Id {old_id}: baris tidak punya key 'tahun', dilewati."
                     )
                     continue
 
-                if tahun not in data_by_year:
-                    data_by_year[tahun] = []
+                try:
+                    tahun = int(float(tahun_raw))
+                    if tahun == 0:
+                        raise ValueError("tahun bernilai 0")
+                except (ValueError, TypeError):
+                    logger.warning(
+                        f"Dataset_Id {old_id}: nilai tahun '{tahun_raw}' tidak valid, dilewati."
+                    )
+                    continue
 
-                data_by_year[tahun].append(row)
+                # Bangun record tanpa kolom tahun (sudah diangkat ke level payload)
+                record = {k: v for k, v in row.items() if k != "tahun"}
+                data_by_year.setdefault(tahun, []).append(record)
             # Buat struktur payload untuk setiap tahun
             for tahun, records in data_by_year.items():
                 payloads_to_send.append(

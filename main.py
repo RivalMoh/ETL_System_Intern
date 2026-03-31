@@ -23,24 +23,22 @@ if __name__ == "__main__":
     setup_logging()
     settings = AppSettings()  # Muat Pengaturan dari .env
 
-    parser = argparser.ArgumentParser(
+    parser = argparse.ArgumentParser(
         description="ETL Pipeline untuk Migrasi Data Satu Data Jateng"
     )
     parser.add_argument(
         "--mode",
-        choice=["audit", "migrate"],
+        choices=["audit", "migrate"],
         required=True,
         help="Pilih mode operasi: 'audit' untuk penilaian data, 'migrate' untuk proses migrasi",
     )
 
     # argumen tambahan untuk mode migrate
     parser.add_argument(
-        "--ready_file", type=str, help="Path ke file CSV yang berisi data siap load"
-    )
-    parser.add_argument(
-        "--mapping_file",
-        type=str,
-        help="Path ke file CSV yang berisi mapping old_id ke new_id",
+        "--ready_file", 
+        type=str, 
+        default="data/load_ready.csv", 
+        help="Path ke file CSV yang berisi data siap load"
     )
 
     args = parser.parse_args()
@@ -62,4 +60,4 @@ if __name__ == "__main__":
             sys.exit(1)
 
         load_pipeline = MigrationLoadPipeline(settings)
-        load_pipeline.run(args.ready_file, args.mapping_file)
+        load_pipeline.run(args.ready_file)
