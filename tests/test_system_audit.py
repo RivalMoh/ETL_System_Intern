@@ -31,6 +31,8 @@ def make_settings(**overrides) -> AppSettings:
     settings.dup_sample_size = 3
     settings.require_columns = ["tahun", "jumlah"]
     settings.allowed_load_statuses = ["ready"]
+    settings.year_min = 2000
+    settings.year_max = 2025
     settings.new_base_url = "https://target.test/v1"
     settings.new_api_key = "target-key"
     for k, v in overrides.items():

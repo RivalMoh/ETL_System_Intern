@@ -151,3 +151,45 @@ def test_backward_compat_missing_column(tmp_path):
     tracker = MigrationProgressTracker(progress_file=progress_file)
     assert "7" in tracker.get_done_ids()           # tetap bisa baca status done
     assert tracker.get_next_batch_number() == 1    # batch_number None → fallback ke 1
+
+
+# Regression: duplicate index labels
+
+
+def test_rapid_upsert_does_not_crash_with_duplicate_index(tmp_path):
+    """
+    Regression test: sebelum fix, upsert berulang kali bisa menyebabkan
+    ValueError: cannot reindex on an axis with duplicate labels.
+
+    Scenario: record() dipanggil 3 kali berturut-turut untuk ID yang sama
+    (batch 1 → failed, batch 1 lagi → still failed, batch 2 → done).
+    """
+    progress_file = str(tmp_path / "progress.csv")
+    tracker = MigrationProgressTracker(progress_file=progress_file)
+
+    # Simulasi 3 upsert berturut-turut tanpa reload
+    tracker.record("10", "Tabel A", "old_10", STATUS_FAILED,  rows_sent=0,  batch_number=1)
+    tracker.record("10", "Tabel A", "old_10", STATUS_FAILED,  rows_sent=0,  batch_number=1)
+    tracker.record("10", "Tabel A", "old_10", STATUS_DONE,    rows_sent=50, batch_number=2)
+
+    # Tidak boleh ada exception, dan hanya 1 baris hasil akhir
+    assert len(tracker._df) == 1
+    assert "10" in tracker.get_done_ids()
+    assert tracker._df.iloc[0]["rows_sent"] == 50
+
+
+def test_multiple_ids_upsert_interleaved(tmp_path):
+    """
+    Upsert beberapa ID secara bergantian tidak boleh saling mengganggu.
+    """
+    progress_file = str(tmp_path / "progress.csv")
+    tracker = MigrationProgressTracker(progress_file=progress_file)
+
+    tracker.record("1", "A", "o1", STATUS_DONE,    rows_sent=10, batch_number=1)
+    tracker.record("2", "B", "o2", STATUS_FAILED,  rows_sent=0,  batch_number=1)
+    tracker.record("1", "A", "o1", STATUS_DONE,    rows_sent=20, batch_number=2)  # upsert ID=1
+    tracker.record("2", "B", "o2", STATUS_DONE,    rows_sent=30, batch_number=2)  # upsert ID=2
+    tracker.record("3", "C", "o3", STATUS_PARTIAL, rows_sent=5,  batch_number=2)  # new ID=3
+
+    assert len(tracker._df) == 3
+    assert tracker.get_done_ids() == {"1", "2"}

@@ -1,7 +1,9 @@
 import json
 import logging
 import pandas as pd
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+
+from src.loader.column_normalizer import ColumnNormalizer
 
 logger = logging.getLogger(__name__)
 
@@ -14,11 +16,16 @@ class MigrationTransformer:
     3. menghasilkan list of payloads dengan format {"target_id": 23, "body": {"tahun_data": 2025, "data": [...]}}
     """
 
-    def __init__(self, df_mapping: pd.DataFrame):
+    def __init__(
+        self,
+        df_mapping: pd.DataFrame,
+        column_normalizer: Optional[ColumnNormalizer] = None,
+    ):
         # asumsi mapping punya kolom "old_id" dan "new_id"
         self.mapping = dict(
             zip(df_mapping["old_id"].astype(str), df_mapping["new_id"].astype(int))
         )
+        self.normalizer = column_normalizer
 
     def build_payloads(self, df_ready: pd.DataFrame) -> List[Dict[str, Any]]:
         """
@@ -43,6 +50,10 @@ class MigrationTransformer:
             # kelompokkan baris berdasarkan Tahun
             data_by_year: Dict[int, list] = {}
             for row in raw_rows:
+                # ── Normalisasi kolom sebelum proses ──────────────────────
+                if self.normalizer:
+                    row = self.normalizer.normalize_record(row, dataset_id=str(old_id))
+
                 # Ambil nilai tahun tanpa mutasi dict asli
                 tahun_raw = row.get("tahun")
 

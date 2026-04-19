@@ -94,6 +94,47 @@ class DataAssessor:
         self._update_flags(aligned_mask, reason)
         return self
 
+    def warn_suspicious_year(
+        self,
+        min_year: int = 2000,
+        max_year: int = 2025,
+        year_column: str = "tahun",
+    ):
+        """
+        Tandai baris dengan tahun di luar range [min_year, max_year] sebagai WARNING.
+        Data TETAP DIPASS (status TIDAK berubah), tapi flag_reason ditambah warning text.
+
+        Berbeda dari flag_*() methods yang mengubah migration_status → flagged.
+        """
+        if year_column not in self.df.columns:
+            logger.debug(
+                f"Kolom '{year_column}' tidak ditemukan, skip warn_suspicious_year."
+            )
+            return self
+
+        # Konversi ke numeric, non-numeric jadi NaN
+        year_numeric = pd.to_numeric(self.df[year_column], errors="coerce")
+
+        # Deteksi di luar range (abaikan NaN — sudah ditangani oleh flag_missing_values)
+        too_low = year_numeric.notna() & (year_numeric < min_year)
+        too_high = year_numeric.notna() & (year_numeric > max_year)
+
+        suspicious_mask = too_low | too_high
+
+        if suspicious_mask.any():
+            count = int(suspicious_mask.sum())
+            logger.warning(
+                f"Ditemukan {count} baris dengan tahun di luar range "
+                f"[{min_year}-{max_year}]. Baris tetap dipass dengan WARNING."
+            )
+            # Tambahkan warning ke flag_reason TANPA mengubah migration_status
+            warning_text = f"WARNING: tahun di luar range [{min_year}-{max_year}]"
+            self.df.loc[suspicious_mask, "flag_reason"] = self.df.loc[
+                suspicious_mask, "flag_reason"
+            ].apply(lambda x: f"{x} | {warning_text}" if x else warning_text)
+
+        return self
+
     def mark_ready(self) -> pd.DataFrame:
         """
         Finalize assessment by marking unflagged rows as ready.

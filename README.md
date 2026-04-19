@@ -1,141 +1,170 @@
-# 🚀 Sistem ETL & Migrasi Data Otomatis (Satu Data Jateng)
+# Sistem ETL & Migrasi Data Otomatis — Satu Data Jateng
 
-Proyek ini adalah *pipeline* ETL (Extract, Transform, Load) bertaraf *enterprise* yang dirancang untuk mengaudit, membersihkan, dan memigrasikan data tabular dari repositori data lama (Sistem Legacy) ke Portal Data Rebranding yang baru.
+Pipeline ETL (Extract, Transform, Load) untuk mengaudit, membersihkan, dan memigrasikan data tabular dari repositori data lama (Sistem Legacy) ke Portal Satu Data Jateng yang baru.
 
-Sistem ini dibangun dengan fokus pada **Ketahanan Jaringan (Resilience)**, **Validasi Forensik (Human-in-the-Loop)**, dan **Migrasi Stateful yang Aman** — mampu dilanjutkan antar batch tanpa risiko data dobel.
-
----
-
-## ✨ Fitur Utama
-
-1. **Dual-Mode Execution:** Mode `--mode audit` untuk pra-evaluasi data, dan `--mode migrate` untuk pengeksekusian API target.
-2. **Auto-Schema Normalization:** Secara cerdas mendeteksi dan menstandarisasi kolom "tahun" meskipun nama tidak konsisten (`tahun_data`, `thn`, `Tahun`, dll.).
-3. **Fuzzy Table Deduplication:** Mencegah migrasi data duplikat menggunakan `token_sort_ratio` untuk kesamaan judul, dikombinasikan dengan **fuzzy comparison antar baris** untuk mendeteksi dataset yang hampir identik (lebih dari 90% mirip), bukan sekadar exact-match.
-4. **Hybrid Reporting:** Otomatis memisahkan laporan eksekutif ke Excel (`.xlsx`) dan data mentah ke CSV massal untuk menghindari batas limit baris Excel.
-5. **Smart Auto-Mapping:** Mencocokkan ID Dataset dari sistem lama ke sistem baru secara otomatis menggunakan kemiripan judul (fuzzy NLP).
-6. **Stateful Batch Migration:** Pipeline migrate dapat dilanjutkan antar batch — tabel yang sudah berhasil di-POST tidak akan dikirim ulang, mencegah data dobel.
+Dibangun dengan fokus pada **Ketahanan Jaringan (Resilience)**, **Validasi Forensik (Human-in-the-Loop)**, **Normalisasi Data Otomatis**, dan **Migrasi Stateful** — mampu dilanjutkan antar batch tanpa risiko data dobel.
 
 ---
 
-## 🔄 Alur Sistem (Flowchart)
+## Fitur Utama
+
+| Fitur | Deskripsi |
+|---|---|
+| **Dual-Mode Execution** | `--mode audit` untuk pra-evaluasi data, `--mode migrate` untuk pengiriman ke API target |
+| **Data Preprocessing** | Normalisasi kolom otomatis, perbaikan format `kode_wilayah`, pembersihan multi-space |
+| **Column Mapping** | Pemetaan nama kolom non-standar ke standar via `column_mapping.json` |
+| **Fuzzy Table Deduplication** | Deteksi dataset duplikat via kemiripan judul + fingerprint data baris (bidirectional fuzzy) |
+| **Year Validation** | Warning otomatis untuk tahun di luar range (default 2000-2025), tanpa memblokir data |
+| **Hybrid Reporting** | Laporan eksekutif Excel + data mentah CSV, terpisah antara *ready* dan *review* |
+| **Smart Auto-Mapping** | Mencocokkan ID dataset lama ke sistem baru via kemiripan judul (fuzzy NLP) |
+| **Stateful Batch Migration** | Pipeline migrate bisa dilanjutkan antar batch — tabel `done` otomatis di-skip |
+| **Column Normalizer (Loader)** | Rename kolom payload sebelum POST ke API target, mencegah 422 error |
+
+---
+
+## Alur Sistem
 
 Sistem beroperasi dalam dua jalur utama yang terpisah untuk menjaga keamanan data.
 
 ```mermaid
 graph TD
-    A([Mulai: Eksekusi main.py]) --> B{Pilih Mode?}
+    A([Mulai]) --> B{Pilih Mode?}
 
-    %% Mode Audit Pathway
-    B -->|--mode audit| C[Tarik Katalog Data Lama via API]
+    %% Mode Audit
+    B -->|--mode audit| C[Tarik Katalog via API]
 
-    subgraph MACRO_ASSESSMENT ["MACRO ASSESSMENT"]
-    C --> D["Fuzzy Title Similarity\n(token_sort_ratio)"]
-    D --> E["Fuzzy Data Fingerprinting\n(bidirectional row comparison)"]
-    E --> F[Kelompokkan Tabel Suspect & Duplikat]
+    subgraph MACRO ["MACRO ASSESSMENT"]
+        C --> D["Fuzzy Title Similarity"]
+        D --> E["Fuzzy Data Fingerprinting"]
+        E --> F[Kelompokkan Suspect & Duplikat]
     end
 
-    subgraph MICRO_ASSESSMENT ["MICRO ASSESSMENT"]
-    F --> G[Tarik Detail Baris per Tabel]
-    G --> H[Auto-Normalisasi Kolom tahun]
-    H --> I[Validasi Missing Values]
-    I --> J["Routing: ready_for_load vs manager_review_required\n(dataset suspect → SEMUA baris ke review)"]
-    J --> K[Pembungkusan Row_Data_JSON]
+    subgraph PREPROCESS ["DATA PREPROCESSING"]
+        F --> G[Tarik Detail Baris per Tabel]
+        G --> G1["Column Rename via column_mapping.json"]
+        G1 --> G2["Whitespace Strip & Collapse"]
+        G2 --> G3["Fix kode_wilayah Format"]
     end
 
-    subgraph REPORTING ["HYBRID REPORTING"]
-    K --> L[Generate Laporan Eksekutif Excel]
-    K --> M[Ekspor Load_Ready.csv]
-    K --> N[Ekspor Manager_Review.csv]
+    subgraph MICRO ["MICRO ASSESSMENT"]
+        G3 --> H[Normalisasi Kolom Tahun]
+        H --> I[Validasi Missing Values]
+        I --> I2["Year Range Warning"]
+        I2 --> J["Routing: ready vs review"]
+        J --> K[Bungkus Row_Data_JSON]
     end
 
-    %% Mode Migrate Pathway
+    subgraph REPORT ["REPORTING"]
+        K --> L[Excel Audit Report]
+        K --> M[Load_Ready.csv]
+        K --> N[Manager_Review.csv]
+    end
+
+    %% Mode Migrate
     B -->|--mode migrate| O[Baca migration_progress.csv]
 
-    subgraph STATEFUL_LOADER ["STATEFUL LOADER & MIGRATION"]
-    O --> P[Tarik Katalog API Sistem Baru]
-    P --> Q["Filter Remaining Catalog\n(exclude new_id yang sudah done)"]
-    Q --> R{Ada tabel tersisa?}
-    R -->|Tidak| S([Semua selesai ✅])
-    R -->|Ya| T[Auto-Mapping ID via Fuzzy Judul]
-    T --> U["Transformasi Payload\n(group by tahun_data)"]
-    U --> V[POST HTTP per Dataset]
-    V --> W{"Semua tahun\nberhasil?"}
-    W -->|Semua OK| X["Record: done ✅\n→ tidak akan diproses lagi"]
-    W -->|Sebagian OK| Y["Record: partial ⚠️\n→ retry di batch berikutnya"]
-    W -->|Semua gagal| Z2["Record: failed ❌\n→ retry di batch berikutnya"]
-    X --> AA[Log Batch Summary]
-    Y --> AA
-    Z2 --> AA
-    AA --> AB([Jalankan ulang untuk batch berikutnya])
+    subgraph MIGRATE ["STATEFUL MIGRATION"]
+        O --> P[Tarik Katalog API Baru]
+        P --> Q["Exclude done IDs"]
+        Q --> R{Ada tabel tersisa?}
+        R -->|Ya| T[Auto-Mapping ID via Fuzzy]
+        T --> T2["Column Normalizer"]
+        T2 --> U["Transform Payload per tahun"]
+        U --> V[POST ke API Target]
+        V --> W{Hasil?}
+        W -->|Semua OK| X["done - skip di batch berikut"]
+        W -->|Sebagian OK| Y["partial - retry"]
+        W -->|Semua gagal| Z2["failed - retry"]
+        X --> AA[Log Batch Summary]
+        Y --> AA
+        Z2 --> AA
     end
 
+    %% Titik Selesai (Unified Endpoints)
     L --> ZZ([Selesai])
     M --> ZZ
     N --> ZZ
-
-    classDef modeAudit fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
-    classDef modeMigrate fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
-    classDef statusNode fill:#fff3e0,stroke:#e65100,stroke-width:1px;
-    class C,D,E,F,G,H,I,J,K,L,M,N modeAudit;
-    class O,P,Q,T,U,V modeMigrate;
-    class W,X,Y,Z2,AA,AB statusNode;
+    R -->|Tidak| ZZ
+    AA --> ZZ
 ```
 
 ---
 
-## 📂 Struktur Proyek
+## Struktur Proyek
 
 ```text
 ETL_Pipeline_Satu-Data-Jateng/
 ├── data/
-│   ├── raw/                    # Tempat penyimpanan sementara (opsional)
-│   ├── processed/              # Data hasil pemrosesan
-│   └── reports/                # Output seluruh laporan:
-│       ├── Audit_Migrasi_*.xlsx        # Laporan Eksekutif (4 sheet)
-│       ├── Load_Ready_*.csv            # Data siap migrasi
-│       ├── Manager_Review_*.csv        # Data perlu review manual
-│       ├── auto_mapping_result.csv     # Hasil Auto-Mapping ID
-│       ├── unmapped_datasets.csv       # Dataset tanpa kecocokan di sistem baru
-│       ├── failed_payloads_batch*.csv  # Payload yang gagal di-POST per batch
-│       └── migration_progress.csv      # State migrasi antar batch (stateful)
+│   ├── column_mapping.json          # Konfigurasi alias nama kolom
+│   ├── raw/                         # Penyimpanan sementara (opsional)
+│   ├── processed/                   # Data hasil pemrosesan
+│   └── reports/                     # Semua output laporan:
+│       ├── Audit_Migrasi_*.xlsx         # Laporan Eksekutif (5 sheet)
+│       ├── Load_Ready_*.csv             # Data siap migrasi
+│       ├── Manager_Review_*.csv         # Data perlu review manual
+│       ├── auto_mapping_result.csv      # Hasil Auto-Mapping ID
+│       ├── unmapped_datasets.csv        # Dataset tanpa kecocokan
+│       ├── column_mapping_report.csv    # Log rename kolom saat migrasi
+│       ├── failed_payloads_batch*.csv   # Payload gagal per batch
+│       └── migration_progress.csv       # State migrasi (stateful)
+│
 ├── src/
-│   ├── config.py               # Pengaturan & pembacaan environment variables (.env)
-│   ├── extract.py              # Klien API Sistem Lama (retry otomatis, paginated)
-│   ├── catalog_assessor.py     # Macro-Assessment (duplikat fuzzy judul + data)
-│   ├── data_assessor.py        # Micro-Assessment (normalisasi skema & validasi baris)
-│   ├── load.py                 # LoadGate — filter baris berdasarkan migration_status
-│   ├── reporting.py            # Pembuat Laporan Hybrid (Excel & CSV)
-│   ├── pipeline.py             # Orkestrator Mode Audit
-│   └── loader/                 # Modul Eksekusi Migrasi
-│       ├── client.py           # Klien HTTP API Sistem Baru (Target Portal)
-│       ├── mapper.py           # Auto-Mapping ID via fuzzy title matching
-│       ├── transform.py        # Transformasi payload JSON & grouping per tahun_data
-│       ├── progress_tracker.py # Pelacak state migrasi per tabel antar batch
-│       └── pipeline.py         # Orkestrator Mode Migrate (Stateful)
-├── tests/                      # Unit Test (Pytest)
-│   ├── conftest.py             # Shared fixtures & test doubles
-│   ├── test_catalog_assessor.py
-│   ├── test_data_assess.py
-│   ├── test_extract.py
-│   ├── test_load.py
-│   └── test_progress_tracker.py
+│   ├── config.py                    # Pembacaan .env & pengaturan
+│   ├── extract.py                   # API client sistem lama (retry, paginated)
+│   ├── catalog_assessor.py          # Macro-Assessment (duplikat fuzzy)
+│   ├── data_preprocessor.py         # Preprocessing: rename, whitespace, kode_wilayah
+│   ├── data_assessor.py             # Micro-Assessment: validasi & warning
+│   ├── load.py                      # LoadGate — filter rows by migration_status
+│   ├── reporting.py                 # Report generator (Excel & CSV)
+│   ├── pipeline.py                  # Orkestrator mode audit
+│   └── loader/                      # Modul mode migrate
+│       ├── client.py                    # HTTP client API target
+│       ├── mapper.py                    # Auto-Mapping ID (fuzzy title)
+│       ├── column_normalizer.py         # Normalisasi kolom sebelum POST
+│       ├── transform.py                 # Transform payload & grouping per tahun
+│       ├── progress_tracker.py          # State tracker antar batch
+│       └── pipeline.py                  # Orkestrator mode migrate
+│
+├── tests/                           # 143 unit & system tests
+│   ├── conftest.py                      # Shared fixtures
+│   ├── test_catalog_assessor.py         # Fuzzy grouping & fingerprint
+│   ├── test_data_preprocessor.py        # Column rename, whitespace, kode_wilayah
+│   ├── test_data_assess.py              # Flag, warn, standardize year
+│   ├── test_column_normalizer.py        # Loader column normalizer
+│   ├── test_extract.py                  # Paginated extraction
+│   ├── test_load.py                     # LoadGate filtering
+│   ├── test_loader_client.py            # Target API client
+│   ├── test_mapper.py                   # Auto-Mapping & collision
+│   ├── test_progress_tracker.py         # State persistence & upsert
+│   ├── test_transform.py               # Payload transformation
+│   ├── test_system_audit.py             # E2E audit pipeline
+│   └── test_system_migrate.py           # E2E migrate pipeline
+│
 ├── logs/
-│   └── etl-pipeline.log        # Log lengkap seluruh eksekusi
-├── .env                        # Environment variables rahasia (tidak di-commit)
-├── .env.example                # Template variabel lingkungan
+│   └── etl-pipeline.log            # Log eksekusi
+├── .env                             # Environment variables (tidak di-commit)
+├── .env.example                     # Template .env
 ├── requirements.txt
-└── main.py                     # Titik Masuk Utama (CLI App)
+└── main.py                          # Entry point (CLI)
 ```
 
 ---
 
-## ⚙️ Persyaratan & Instalasi
+## Instalasi
 
-1. Pastikan **Python 3.10+** sudah terinstal.
-2. *Clone* repositori dan masuk ke folder proyek.
-3. Buat *Virtual Environment* dan instal dependensi:
+### Prasyarat
+
+- Python 3.10+
+- `pip`
+
+### Setup
 
 ```bash
+# 1. Clone & masuk ke folder proyek
+git clone <repo_url>
+cd ETL_Pipeline_Satu-Data-Jateng
+
+# 2. Buat virtual environment
 python -m venv .venv
 
 # Windows:
@@ -143,82 +172,103 @@ python -m venv .venv
 # Mac/Linux:
 source .venv/bin/activate
 
+# 3. Install dependensi
 pip install -r requirements.txt
+
+# 4. Salin dan isi .env
+cp .env.example .env
+# Edit .env dengan kredensial yang benar
 ```
 
-4. Buat file `.env` berdasarkan `.env.example`:
+### Konfigurasi `.env`
 
 ```env
-# --- KONFIGURASI SISTEM LAMA (SOURCE) ---
+# ── SISTEM LAMA (SOURCE) ─────────────────────────────────
 BASE_URL=https://[URL_SISTEM_LAMA]/v1/data
 API_KEY=Bearer TOKEN_LAMA_ANDA
-MAX_PAGES=11
-MAX_DATASETS_TO_ASSESS=1000
+MAX_PAGES=11                        # Maks halaman katalog yang diambil
+MAX_DATASETS_TO_ASSESS=1000         # Maks dataset yang dievaluasi
 
-# --- PENGATURAN AUDIT ---
-DUPLICATE_TITLE_THRESHOLD=85       # 0-100, threshold kemiripan judul
-DUPLICATE_SAMPLE_SIZE=5            # Jumlah baris sampel untuk cek duplikat data
-REQUIRED_COLUMNS=tahun,jumlah      # Kolom wajib per tabel
-LOAD_ALLOWED_STATUSES=ready        # Status yang boleh dimuat
+# ── PENGATURAN AUDIT ──────────────────────────────────────
+DUPLICATE_TITLE_THRESHOLD=85        # 0-100, threshold kemiripan judul
+DUPLICATE_SAMPLE_SIZE=5             # Jumlah baris sampel untuk cek duplikat
+REQUIRED_COLUMNS=tahun,kode_wilayah # Kolom wajib per tabel
+LOAD_ALLOWED_STATUSES=ready         # Status yang boleh dimuat
+YEAR_MIN=2000                       # Batas bawah tahun (warning jika < ini)
+YEAR_MAX=2025                       # Batas atas tahun (warning jika > ini)
 
-# --- KONFIGURASI SISTEM BARU (TARGET) ---
+# ── SISTEM BARU (TARGET) ─────────────────────────────────
 NEW_BASE_URL=https://[URL_SISTEM_BARU]/api/v1/data
 NEW_API_KEY=Bearer TOKEN_BARU_ANDA
 ```
 
 ---
 
-## 🚀 Cara Penggunaan
+## Cara Penggunaan
 
 ### Tahap 1 — Mode Audit
 
-Mode ini **tidak mengirim data** ke sistem baru. Ia menarik data dari sistem lama, mengevaluasi kualitasnya, dan menghasilkan laporan.
+Mode ini **tidak mengirim data** ke sistem baru. Ia menarik data dari sistem lama, membersihkan, mengevaluasi kualitasnya, dan menghasilkan laporan.
 
 ```bash
 python main.py --mode audit
 ```
 
+**Yang terjadi:**
+
+1. Tarik seluruh katalog dataset dari API sistem lama (paginated)
+2. **Macro Assessment** — Deteksi dataset duplikat via fuzzy title + fingerprint data
+3. **Preprocessing** — Per dataset:
+   - Rename kolom non-standar via `column_mapping.json`
+   - Strip & collapse whitespace (`"Jawa   Tengah"` → `"Jawa Tengah"`)
+   - Fix format `kode_wilayah` (`3320` → `33.20`)
+4. **Micro Assessment** — Per dataset:
+   - Normalisasi kolom tahun (fallback safety)
+   - Flag baris dengan missing values pada kolom wajib
+   - Warning untuk tahun di luar range (tetap pass, tidak diblokir)
+5. **Routing** — Pisahkan data ke *ready* atau *review*
+6. **Reporting** — Generate Excel + CSV
+
 **Output di `data/reports/`:**
 
 | File | Isi |
 |---|---|
-| `Audit_Migrasi_YYYYMMDD_HHMM.xlsx` | Laporan eksekutif 4 sheet (Duplikat, Skip, Kualitas Data, Summary) |
-| `Load_Ready_*.csv` | Data yang 100% bersih, siap untuk mode migrate |
-| `Manager_Review_*.csv` | Data perlu peninjauan manual (missing values, tabel suspect, dll.) |
+| `Audit_Migrasi_*.xlsx` | Laporan eksekutif multi-sheet |
+| `Load_Ready_*.csv` | Data 100% bersih, siap migrate |
+| `Manager_Review_*.csv` | Data perlu review manual |
 
 ---
 
 ### Tahap 2 — Mode Migrate
 
-Setelah file CSV siap dari Tahap 1, jalankan mode ini untuk mengirim data ke sistem baru. Pipeline ini **stateful** — progress disimpan antar batch ke `migration_progress.csv`.
+Setelah file CSV dari Tahap 1 tersedia, jalankan mode ini untuk mengirim data ke sistem baru. Pipeline ini **stateful** — progress disimpan di `migration_progress.csv`.
 
 ```bash
 python main.py --mode migrate --ready_file data/reports/Load_Ready_XXXXXXXX_XXXX.csv
 ```
 
-> Jika `--ready_file` tidak diisi, sistem menggunakan default: `data/load_ready.csv`.
+> Jika `--ready_file` tidak diisi, default: `data/load_ready.csv`.
 
-**Yang terjadi otomatis:**
+**Yang terjadi:**
 
-1. Membaca progress dari `data/reports/migration_progress.csv` (kosong jika cold start).
-2. Menarik katalog dari sistem baru.
-3. Meng-exclude tabel yang sudah berstatus `done` dari run sebelumnya.
-4. Melakukan Auto-Mapping judul lama → ID sistem baru.
-5. Transformasi & POST payload ke API target, dikelompokkan per `tahun_data`.
-6. Mencatat status setiap dataset: `done` / `partial` / `failed`.
-7. Menampilkan ringkasan batch dan total progress keseluruhan.
+1. Baca progress dari `migration_progress.csv` (kosong jika cold start)
+2. Tarik katalog dari API sistem baru
+3. Exclude tabel yang sudah `done` dari batch sebelumnya
+4. Auto-Mapping judul lama → ID sistem baru (fuzzy)
+5. Normalisasi kolom payload via `ColumnNormalizer` + `column_mapping.json`
+6. Transform & POST payload per `tahun_data` ke API target
+7. Catat status per dataset: `done` / `partial` / `failed`
+8. Simpan rename report ke `column_mapping_report.csv`
 
 **Status Migrasi per Tabel:**
 
-| Status | Arti | Perilaku Batch Berikutnya |
+| Status | Arti | Batch Berikutnya |
 |---|---|---|
-| `done` | Semua tahun berhasil dikirim | **Di-skip** — tidak diproses lagi |
-| `partial` | Sebagian tahun gagal | Diretry dari awal |
-| `failed` | Semua tahun gagal | Diretry dari awal |
+| `done` | Semua tahun berhasil | **Di-skip** |
+| `partial` | Sebagian tahun gagal | Di-retry |
+| `failed` | Semua tahun gagal | Di-retry |
 
-> **Catatan:** Untuk tabel `partial`, seluruh tahun akan dikirim ulang di batch berikutnya. Pastikan API target bersifat idempotent (atau bersihkan data lama terlebih dahulu) untuk menghindari data dobel pada tahun yang sudah berhasil.
-
-**Contoh output log per batch:**
+**Contoh log output:**
 
 ```
 ------------------------------------------------------------
@@ -230,129 +280,242 @@ STATUS KATALOG TARGET | Total: 5 tabel | Done: 3 | Sisa: 2
   [PARTIAL] ID=    4 | Data Kemiskinan Jateng
   [NEW]     ID=    5 | Data Curah Hujan
 ------------------------------------------------------------
-=== BATCH #2 SELESAI | ✅ Done: 1 | ⚠️ Partial: 0 | ❌ Gagal: 1 ===
+=== BATCH #2 SELESAI | Done: 1 | Partial: 0 | Gagal: 1 ===
 PROGRESS TOTAL: 4/5 tabel selesai | 1 tabel tersisa
 ```
 
 ---
 
-## 🔬 Detail Teknis: Logika Deteksi Duplikat
+## Detail Teknis
+
+### Data Preprocessing (`DataPreprocessor`)
+
+Tahap cleaning yang berjalan **sebelum** assessment. Tiga operasi dijalankan secara berurutan:
+
+#### 1. Column Normalization
+
+Rename kolom non-standar ke nama standar berdasarkan `data/column_mapping.json`:
+
+```json
+{
+  "column_aliases": {
+    "kab_kota": "nama_wilayah",
+    "kod_wil": "kode_wilayah",
+    "thn": "tahun",
+    "jml": "jumlah"
+  },
+  "fuzzy_threshold": 80
+}
+```
+
+**Prioritas matching:**
+1. **Explicit alias** — Lookup langsung dari JSON (pasti benar)
+2. **Hardcoded tahun** — Patterns `tahun_data`, `thn`, `year` (fallback safety)
+3. **Lowercase** — `Kecamatan` → `kecamatan`
+
+> Jika 2+ kolom rename ke target yang sama (misal `tahun_data` DAN `tahun_pembuatan` → `tahun`), hanya yang pertama yang di-rename. Yang kedua di-skip dengan warning untuk mencegah duplikat kolom.
+
+#### 2. Whitespace Normalization
+
+- Strip leading/trailing whitespace
+- Collapse multiple spaces: `"Jawa   Tengah"` → `"Jawa Tengah"`
+- NaN tetap NaN (tidak berubah jadi string `"nan"`)
+
+#### 3. Kode Wilayah Format Fix
+
+Memperbaiki format kode wilayah sesuai standar BPS (Badan Pusat Statistik):
+
+| Input | Digit | Output | Level |
+|---|---|---|---|
+| `3320` | 4 | `33.20` | Kab/Kota |
+| `332001` | 6 | `33.20.01` | Kecamatan |
+| `33200107` | 8 | `33.20.01.07` | Kelurahan |
+| `3320010007` | 10 | `33.20.01.0007` | Desa |
+| `33.20` | — | `33.20` (skip) | Sudah benar |
+| `abc` | — | `abc` (skip + warn) | Non-numeric |
+
+---
+
+### Year Validation (`warn_suspicious_year`)
+
+Menandai baris dengan tahun **di luar range** (default `[2000-2025]`) sebagai **WARNING**:
+
+| Aspek | `flag_*()` (blocking) | `warn_suspicious_year()` (non-blocking) |
+|---|---|---|
+| `migration_status` | → `flagged` (diblokir) | Tidak berubah (tetap `ready`) |
+| `flag_reason` | Ditambah alasan | Ditambah `WARNING: ...` |
+| Efek pada load | Baris **tidak di-load** | Baris **tetap di-load** |
+| Use case | Data rusak: missing, NaN | Data mencurigakan tapi mungkin valid |
+
+Konfigurasi via `.env`:
+```env
+YEAR_MIN=2000
+YEAR_MAX=2025
+```
+
+---
+
+### Column Normalizer (Loader)
+
+Saat mode `migrate`, kolom payload di-normalize **sebelum POST** ke API target menggunakan `ColumnNormalizer`:
+
+**Strategi matching (berurutan):**
+1. **Explicit alias** — Dari `column_mapping.json`
+2. **Already standard** — Kolom sudah jadi target name → skip
+3. **Exact match** — Terhadap known target columns
+4. **Fuzzy match** — Threshold 80% (configurable)
+5. **Lowercase fallback** — Normalisasi minimal
+
+Setelah migrasi, cek `data/reports/column_mapping_report.csv` untuk melihat semua rename yang dilakukan.
+
+---
+
+### Logika Deteksi Duplikat
 
 Deteksi duplikat berjalan dalam dua tahap:
 
-### Tahap 1 — Kemiripan Judul (Macro)
+#### Tahap 1 — Kemiripan Judul (Macro)
 
-Menggunakan `fuzz.token_sort_ratio` untuk mengelompokkan dataset yang judulnya mirip. Judul dinormalisasi terlebih dahulu (lowercase, hapus tanda baca, normalisasi spasi).
+Menggunakan `fuzz.token_sort_ratio` untuk mengelompokkan dataset yang judulnya mirip:
 
 ```
-"Data Padi Jawa Tengah"  ←→  "Jawa Tengah Data Padi"
-→ token_sort_ratio = 100  → masuk suspect group
+"Data Padi Jawa Tengah"  vs  "Jawa Tengah Data Padi"
+→ token_sort_ratio = 100  → suspect group
 ```
 
-### Tahap 2 — Kemiripan Isi Data (Micro)
+#### Tahap 2 — Kemiripan Data (Micro)
 
-Untuk setiap pasangan dataset dalam suspect group, diambil sampel N baris. Fingerprint dibuat dalam format `col=val|col=val` **per baris**, lalu dibandingkan menggunakan **bidirectional fuzzy matching**:
+Untuk setiap pasangan suspect, diambil N baris sampel. Fingerprint per baris dalam format `col=val|col=val`, lalu dibandingkan dengan **bidirectional fuzzy matching**:
 
-- Setiap baris dari dataset A dicari pasangan terbaiknya di B (`fuzz.ratio`)
-- Setiap baris dari dataset B dicari pasangan terbaiknya di A
-- Skor akhir = rata-rata kedua arah (simetris)
-
-**Keunggulan pendekatan ini** dibanding exact match (MD5):
-
-| Skenario | Exact Match | Fuzzy Match (≥98%) |
+| Skenario | Exact Match (MD5) | Fuzzy Match (>=98%) |
 |---|---|---|
-| Data identik persis | ✅ Terdeteksi | ✅ Terdeteksi |
-| Data identik, urutan baris beda | ✅ Terdeteksi | ✅ Terdeteksi |
-| Data hampir identik (1 typo) | ❌ Tidak terdeteksi | ✅ Terdeteksi |
-| Data berbeda | ✅ Tidak terdeteksi | ✅ Tidak terdeteksi |
-
-Threshold default: **98%** (dapat dikonfigurasi via kode).
+| Data identik persis | Terdeteksi | Terdeteksi |
+| Data identik, urutan beda | Terdeteksi | Terdeteksi |
+| Data hampir identik (1 typo) | **Tidak** terdeteksi | Terdeteksi |
+| Data berbeda | Tidak terdeteksi | Tidak terdeteksi |
 
 ---
 
-## 🔬 Detail Teknis: Routing Data (Audit Pipeline)
+### Routing Data (Audit)
 
-Setelah micro-assessment, setiap dataset mendapat keputusan `load_decision`:
+Setelah micro-assessment, setiap dataset mendapat keputusan:
 
 | Kondisi | Keputusan | Routing |
 |---|---|---|
-| Tidak suspect & tidak ada baris flagged | `ready_for_load` | Baris **ready** → `Load_Ready.csv` |
-| Suspect duplikat **ATAU** ada baris flagged | `manager_review_required` | **SEMUA baris** (ready + flagged) → `Manager_Review.csv` |
+| Tidak suspect & tidak ada baris flagged | `ready_for_load` | Baris ready → `Load_Ready.csv` |
+| Suspect **ATAU** ada baris flagged | `manager_review_required` | **SEMUA baris** → `Manager_Review.csv` |
 
-> **Mengapa semua baris dikirim ke review?** Dataset yang suspect duplikat memiliki keraguan pada identitas datanya, bukan hanya pada kualitas baris individual. Membiarkan baris "ready" dari dataset suspect langsung dimuat dapat mencemari sistem target jika ternyata dataset tersebut memang duplikat.
+> **Mengapa semua baris dikirim ke review?** Dataset suspect memiliki keraguan pada identitas datanya. Membiarkan baris "ready" dari dataset suspect langsung dimuat dapat mencemari sistem target jika ternyata dataset tersebut duplikat.
 
 ---
 
-## 🧪 Pengujian (Unit Testing)
+## Menambah Alias Kolom Baru
 
-Proyek ini diuji menggunakan **Pytest**. Test mencakup semua komponen inti:
+Edit `data/column_mapping.json`:
 
-```bash
-pytest                      # Jalankan seluruh test
-pytest tests/ -v            # Mode verbose (lihat nama test per item)
-pytest --cov=src            # Dengan laporan coverage
+```json
+{
+  "column_aliases": {
+    "nama_kolom_lama": "nama_kolom_standar",
+    "singkatan": "nama_lengkap"
+  },
+  "fuzzy_threshold": 80
+}
 ```
 
-**Coverage per modul:**
-
-| File Test | Yang Diuji |
-|---|---|
-| `test_catalog_assessor.py` | Fuzzy grouping, fingerprint, deteksi duplikat, near-identical strings |
-| `test_data_assess.py` | Flag missing values, flag duplicates, standardize year column |
-| `test_extract.py` | Paginated catalog extraction, keyword filter, retry behavior |
-| `test_load.py` | LoadGate status filtering, build summary |
-| `test_progress_tracker.py` | Cold start, upsert, batch increment, persistence, backward compat |
+File ini digunakan oleh **dua** komponen:
+- `DataPreprocessor` (audit) — Rename kolom DataFrame sebelum assessment
+- `ColumnNormalizer` (migrate) — Rename kolom record dict sebelum POST ke API
 
 ---
 
-## 📋 Riwayat Perbaikan Utama
+## Pengujian
 
-Berikut adalah masalah signifikan yang ditemukan dan diperbaiki selama review:
+Proyek ini diuji menggunakan **Pytest** dengan 143 test cases:
 
-### 🔴 Bug Kritis (Sudah Diperbaiki)
+```bash
+# Jalankan semua test
+pytest tests/ -v
+
+# Dengan coverage report
+pytest tests/ --cov=src
+
+# Jalankan test tertentu
+pytest tests/test_data_preprocessor.py -v
+```
+
+### Test Coverage per Modul
+
+| File Test | Modul yang Diuji | Jumlah Test |
+|---|---|---|
+| `test_data_preprocessor.py` | Column rename, whitespace strip, kode_wilayah fix | 25 |
+| `test_column_normalizer.py` | Loader column normalizer (alias, fuzzy, cache) | 18 |
+| `test_transform.py` | Payload transformation & grouping per tahun | 16 |
+| `test_progress_tracker.py` | State persistence, upsert, batch increment | 16 |
+| `test_system_audit.py` | E2E audit pipeline (mock API) | 11 |
+| `test_system_migrate.py` | E2E migrate pipeline (mock API) | 12 |
+| `test_mapper.py` | Auto-Mapping ID & collision detection | 10 |
+| `test_loader_client.py` | HTTP client API target | 10 |
+| `test_data_assess.py` | Flag, warn, standardize year | 8 |
+| `test_catalog_assessor.py` | Fuzzy grouping & fingerprint | 7 |
+| `test_load.py` | LoadGate status filtering | 5 |
+| `test_extract.py` | Paginated extraction | 5 |
+
+---
+
+## Riwayat Perbaikan
+
+### Bug Kritis (Diperbaiki)
 
 | # | File | Masalah | Perbaikan |
 |---|---|---|---|
-| 1 | `config.py` | `os.getenv("NEW_BASE_URL").rstrip("/")` crash jika env var tidak diset | Ganti ke `(os.getenv(...) or "").rstrip("/")` |
-| 2 | `loader/client.py` | Method `close()` salah ketik menjadi `cloase()` → `AttributeError` | Rename ke `close()` |
-| 3 | `loader/pipeline.py` | Nama class `MigrationTransformer` vs `MigrationTranformer` (typo) → `NameError` | Selaraskan penamaan |
-| 4 | `loader/client.py` | Variabel `response` belum diinisialisasi sebelum `try` → `UnboundLocalError` | Deklarasikan `response = None` sebelum `try` |
-| 5 | `loader/client.py` | Bearer check: `.lower().startswith("Bearer ")` — uppercase vs lowercase | Ganti ke `"bearer "` |
-| 6 | `mapper.py` | Path `data/report/` (tanpa 's') → `FileNotFoundError` | Ganti ke `data/reports/`, tambah `os.makedirs` |
-| 7 | `mapper.py` | Karakter `.` liar di akhir file → `SyntaxError` | Hapus karakter tersebut |
+| 1 | `config.py` | `os.getenv("NEW_BASE_URL").rstrip("/")` crash jika env var kosong | `(os.getenv(...) or "").rstrip("/")` |
+| 2 | `loader/client.py` | `cloase()` typo → `AttributeError` | Rename ke `close()` |
+| 3 | `loader/client.py` | `response` belum diinisialisasi → `UnboundLocalError` | `response = None` sebelum `try` |
+| 4 | `loader/pipeline.py` | `MigrationTranformer` typo → `NameError` | Selaraskan penamaan |
+| 5 | `progress_tracker.py` | `loc[mask, k] = v` crash dengan `ValueError: duplicate labels` | Drop-then-append pattern |
+| 6 | `mapper.py` | Path `data/report/` tanpa 's' → `FileNotFoundError` | `data/reports/` + `os.makedirs` |
 
-### 🟡 Bug Logika (Sudah Diperbaiki)
+### Bug Logika (Diperbaiki)
 
 | # | File | Masalah | Perbaikan |
 |---|---|---|---|
-| 8 | `catalog_assessor.py` | Fingerprint MD5 tidak bisa mendeteksi data hampir identik (false negative) | Ganti ke fuzzy bidirectional row comparison |
-| 9 | `catalog_assessor.py` | `sorted(all_values)` menghancurkan konteks kolom-nilai → false positive | Ubah fingerprint ke format `col=val\|col=val` per baris |
-| 10 | `pipeline.py` | Baris `ready` dalam dataset suspect hilang — tidak masuk `ready_list` maupun `review_list` | Routing: semua baris dataset suspect → `review_list` |
-| 11 | `transform.py` | `row.pop("tahun")` mutasi dict asli — side effect tidak aman | Ganti ke `row.get("tahun")` + dict comprehension |
-| 12 | `transform.py` | Log tidak membedakan "key tahun tidak ada" vs "nilai tidak valid" | Pisah menjadi 2 pesan log yang spesifik |
+| 7 | `catalog_assessor.py` | MD5 fingerprint → false negative pada data hampir identik | Fuzzy bidirectional row comparison |
+| 8 | `catalog_assessor.py` | `sorted(all_values)` ubah konteks kolom → false positive | Format `col=val\|col=val` per baris |
+| 9 | `pipeline.py` | Baris ready dari dataset suspect hilang | Routing semua baris suspect ke review |
+| 10 | `transform.py` | `row.pop("tahun")` mutasi dict asli (side effect) | `row.get("tahun")` + dict comprehension |
+| 11 | `data_preprocessor.py` | Multiple kolom rename ke target sama → duplicate columns | Track `used_targets`, skip duplikat |
+| 12 | `data_preprocessor.py` | Unicode arrow `->` crash di Windows cp1252 console | ASCII `->` di log message |
 
-### 🔵 Peningkatan (Sudah Ditambahkan)
+### Peningkatan (Ditambahkan)
 
 | # | Komponen | Peningkatan |
 |---|---|---|
-| 13 | `loader/progress_tracker.py` | Modul baru: state migrasi persisten antar batch |
-| 14 | `loader/pipeline.py` | Refactor menjadi stateful: skip tabel yang sudah `done`, track `partial`/`failed` |
-| 15 | `mapper.py` | Deteksi collision mapping (1 `new_id` → banyak `old_id`) |
-| 16 | `mapper.py` | Validasi kolom input `df_ready` sebelum proses |
-| 17 | `loader/pipeline.py` | Validasi kolom `df_ready` setelah baca CSV |
-| 18 | `loader/pipeline.py` | Failed payloads disimpan ke CSV per batch |
-| 19 | `tests/` | Tambah test untuk near-identical strings, completely-different data, progress tracker |
+| 13 | `data_preprocessor.py` | **Baru:** Preprocessing pipeline (rename, whitespace, kode_wilayah) |
+| 14 | `data_assessor.py` | **Baru:** `warn_suspicious_year()` — warning tanpa blocking |
+| 15 | `column_normalizer.py` | **Baru:** Normalisasi kolom sebelum POST ke API target |
+| 16 | `progress_tracker.py` | **Baru:** State migrasi persisten antar batch |
+| 17 | `loader/pipeline.py` | Stateful: skip `done`, track `partial`/`failed` |
+| 18 | `mapper.py` | Deteksi collision mapping (1 `new_id` → banyak `old_id`) |
+| 19 | `config.py` | `YEAR_MIN`, `YEAR_MAX` configurable dari `.env` |
+| 20 | `column_mapping.json` | **Baru:** Konfigurasi alias kolom terpusat |
 
 ---
 
-## 📦 Dependensi
+## Dependensi
 
 ```text
-pandas==2.2.1       # Manipulasi data tabular
-requests==2.31.0    # HTTP client dengan retry support
-python-dotenv==1.0.1# Pembacaan .env
-openpyxl==3.1.2     # Generate laporan Excel
-thefuzz             # Fuzzy string matching (token_sort_ratio, ratio)
-pytest==8.1.1       # Test framework
-pytest-cov          # Coverage reporting
+pandas==2.2.1         # Manipulasi data tabular
+requests==2.31.0      # HTTP client dengan retry support
+python-dotenv==1.0.1  # Pembacaan .env
+openpyxl==3.1.2       # Generate laporan Excel
+thefuzz               # Fuzzy string matching
+pytest==8.1.1         # Test framework
+pytest-cov            # Coverage reporting
 ```
+
+---
+
+## Lisensi
+
+Proyek internal Satu Data Jawa Tengah by the intern.

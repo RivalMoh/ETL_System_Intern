@@ -81,14 +81,14 @@ class MigrationProgressTracker:
             "batch_number": batch_number,
         }
 
+        # Drop-then-append: aman terhadap duplicate index labels
         mask = self._df["new_id"].astype(str) == str(new_id)
         if mask.any():
-            for k, v in new_row.items():
-                self._df.loc[mask, k] = v
-        else:
-            self._df = pd.concat(
-                [self._df, pd.DataFrame([new_row])], ignore_index=True
-            )
+            self._df = self._df[~mask]
+
+        self._df = pd.concat(
+            [self._df, pd.DataFrame([new_row])], ignore_index=True
+        )
 
         self._save()
 

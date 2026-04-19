@@ -7,6 +7,7 @@ import pandas as pd
 
 from src.config import AppSettings
 from src.loader.client import TargetAPIClient
+from src.loader.column_normalizer import ColumnNormalizer
 from src.loader.mapper import AutoMapper
 from src.loader.progress_tracker import (
     MigrationProgressTracker,
@@ -85,8 +86,12 @@ class MigrationLoadPipeline:
             self.client.close()
             return
 
-        # ── 6. Transformasi Payload ───────────────────────────────────────────
-        transformer = MigrationTransformer(df_mapping)
+        # ── 6. Inisialisasi Column Normalizer ────────────────────────────────
+        normalizer = ColumnNormalizer()
+        logger.info("Column normalizer aktif — kolom akan dinormalisasi sebelum POST.")
+
+        # ── 7. Transformasi Payload ───────────────────────────────────────────
+        transformer = MigrationTransformer(df_mapping, column_normalizer=normalizer)
         payloads = transformer.build_payloads(df_ready)
 
         if not payloads:
@@ -94,7 +99,7 @@ class MigrationLoadPipeline:
             self.client.close()
             return
 
-        # ── 7. Kelompokkan Payload per Target ID ─────────────────────────────
+        # ── 8. Kelompokkan Payload per Target ID ─────────────────────────────
         payloads_by_target: Dict[int, List] = defaultdict(list)
         for p in payloads:
             payloads_by_target[p["target_id"]].append(p)
@@ -102,7 +107,7 @@ class MigrationLoadPipeline:
         # Buat lookup mapping info
         mapping_lookup = df_mapping.set_index("new_id")
 
-        # ── 8. Kirim per Dataset & Catat Status ──────────────────────────────
+        # ── 9. Kirim per Dataset & Catat Status ──────────────────────────────
         logger.info(
             f"Memulai pengiriman untuk {len(payloads_by_target)} dataset "
             f"({len(payloads)} payload total)..."
@@ -158,13 +163,16 @@ class MigrationLoadPipeline:
                 f"| {total_rows_sent} rows"
             )
 
-        # ── 9. Simpan Failed Payloads ─────────────────────────────────────────
+        # ── 10. Simpan Failed Payloads ────────────────────────────────────────
         if failed_payloads:
             failed_path = f"data/reports/failed_payloads_batch{batch_number}.csv"
             pd.DataFrame(failed_payloads).to_csv(failed_path, index=False)
             logger.warning(f"Payload gagal disimpan di: {failed_path}")
 
-        # ── 10. Log Ringkasan Batch ───────────────────────────────────────────
+        # ── 11. Simpan Column Rename Report ──────────────────────────────────
+        normalizer.save_rename_report()
+
+        # ── 12. Log Ringkasan Batch ───────────────────────────────────────────
         summary = tracker.get_summary()
         remaining_after = len(new_catalog) - summary["done"]
 

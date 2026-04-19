@@ -162,8 +162,8 @@ class APIExtractor:
                 break
 
         df = pd.DataFrame(all_records)
-        if not df.empty:
-            df["dataset_id"] = dataset_id
+        # if not df.empty:
+        #     df["dataset_id"] = dataset_id
 
         logger.info(
             "Berhasil menarik %s record untuk dataset ID %s",

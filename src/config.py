@@ -22,8 +22,11 @@ class AppSettings:
             "DUPLICATE_SAMPLE_SIZE", default=5, min_value=1
         )
 
-        self.require_columns = self._read_list("REQUIRED_COLUMNS", ["tahun", "jumlah"])
+        self.require_columns = self._read_list("REQUIRED_COLUMNS", ["tahun", "kode_wilayah"])
         self.allowed_load_statuses = self._read_list("LOAD_ALLOWED_STATUSES", ["ready"])
+
+        self.year_min = self._read_int("YEAR_MIN", default=2000, min_value=1900)
+        self.year_max = self._read_int("YEAR_MAX", default=2025, min_value=2000)
 
         self.new_base_url = (os.getenv("NEW_BASE_URL") or "").rstrip("/")
         self.new_api_key = os.getenv("NEW_API_KEY")

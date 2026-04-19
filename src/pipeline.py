@@ -7,6 +7,7 @@ from src.config import AppSettings
 from src.extract import APIExtractor
 from src.catalog_assessor import CatalogAssessor
 from src.data_assessor import DataAssessor
+from src.data_preprocessor import DataPreprocessor
 from src.load import LoadGate
 from src.reporting import ReportGenerator
 
@@ -70,11 +71,23 @@ class MigrationPipeline:
                 )
                 continue
 
-            # assessment per kolom pada tabel
-            assessor = DataAssessor(df_detail)
+            # ── Preprocessing: clean data sebelum assessment ──────────────
+            preprocessor = DataPreprocessor(df_detail)
+            df_clean = (preprocessor
+                        .normalize_columns()
+                        .strip_whitespace()
+                        .fix_kode_wilayah()
+                        .get_result())
+
+            # ── Assessment: flag & warn ───────────────────────────────────
+            assessor = DataAssessor(df_clean)
             df_assessed = (assessor
                            .standardize_year_column()
                            .flag_missing_values(self.settings.require_columns)
+                           .warn_suspicious_year(
+                               min_year=self.settings.year_min,
+                               max_year=self.settings.year_max,
+                           )
                            .mark_ready())
 
             # Hitung Statisik
