@@ -516,6 +516,21 @@ pytest-cov            # Coverage reporting
 
 ---
 
+## Dokumentasi Lengkap
+
+Dokumentasi detail tersedia di folder [`docs/`](docs/INDEX.md):
+
+| Dokumen | Deskripsi |
+|---|---|
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Arsitektur sistem, alur data, dependency graph |
+| [DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) | Setup, konvensi kode, cara menambah fitur |
+| [API_REFERENCE.md](docs/API_REFERENCE.md) | Referensi kelas dan method per modul |
+| [CHANGELOG.md](docs/CHANGELOG.md) | Riwayat perubahan per versi |
+| [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Panduan mengatasi error umum |
+| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Panduan operasional production |
+
+---
+
 ## Lisensi
 
 Proyek internal Satu Data Jawa Tengah by the intern.
